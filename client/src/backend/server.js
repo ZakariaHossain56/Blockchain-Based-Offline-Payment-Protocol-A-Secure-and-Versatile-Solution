@@ -244,8 +244,15 @@ console.log("📥 fundedAmount type:", typeof deployment.fundedAmount, "value:",
     console.log("✅ Channel state saved to channelStates.json");
 
     // Initialize empty tx history
-    saveTxHistory(deployment.contractAddress, []);
-    console.log("📜 Empty tx history initialized");
+    // saveTxHistory(deployment.contractAddress, []);
+    // console.log("📜 Empty tx history initialized");
+
+    // Initialize empty tx history properly
+const allTx = readJSONFile(TX_FILE); // read existing txs
+allTx[deployment.contractAddress.toLowerCase()] = []; // assign empty array directly
+saveJSONFile(TX_FILE, allTx);
+console.log("📜 Empty tx history initialized correctly");
+
 
     return res.json({ success: true, deployment, initialState });
   } catch (err) {
