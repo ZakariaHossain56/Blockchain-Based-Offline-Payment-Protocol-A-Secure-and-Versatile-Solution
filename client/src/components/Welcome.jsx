@@ -448,15 +448,17 @@ export default function Welcome() {
   // Compute next balances based on sender/receiver
   let nextSenderBalance, nextReceiverBalance;
 
-  if (senderAddr === deploymentSender && receiverAddr === deploymentReceiver) {
-    nextSenderBalance = ethers.BigNumber.from(channelState.balanceSender);
-    nextReceiverBalance = ethers.BigNumber.from(channelState.balanceReceiver);
-  } else if (senderAddr === deploymentReceiver && receiverAddr === deploymentSender) {
-    nextSenderBalance = ethers.BigNumber.from(channelState.balanceReceiver);
-    nextReceiverBalance = ethers.BigNumber.from(channelState.balanceSender);
-  } else {
-    return alert("Sender/receiver mismatch"); // Should not occur with above checks
-  }
+// Use channelState.sender / receiver as reference
+if (senderAddr === channelState.sender && receiverAddr === channelState.receiver) {
+  nextSenderBalance = ethers.BigNumber.from(channelState.balanceSender);
+  nextReceiverBalance = ethers.BigNumber.from(channelState.balanceReceiver);
+} else if (senderAddr === channelState.receiver && receiverAddr === channelState.sender) {
+  nextSenderBalance = ethers.BigNumber.from(channelState.balanceReceiver);
+  nextReceiverBalance = ethers.BigNumber.from(channelState.balanceSender);
+} else {
+  return alert("Sender/receiver mismatch");
+}
+
 
   if (nextSenderBalance.lt(amountWei)) return alert("Insufficient sender balance");
 

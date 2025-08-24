@@ -1,11 +1,31 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Navbar, Footer } from "../components";
+import { ethers } from "ethers";
 
 const OnlineTxDetails = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { tx } = location.state || {};
+  const [account, setAccount] = useState(null);
+
+  // Load connected account
+  useEffect(() => {
+    const loadAccount = async () => {
+      if (!window.ethereum) return console.warn("MetaMask not detected");
+
+      try {
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        const signer = provider.getSigner();
+        const addr = await signer.getAddress();
+        setAccount(addr.toLowerCase());
+      } catch (err) {
+        console.error("Failed to get connected account:", err);
+      }
+    };
+    loadAccount();
+  }, []);
 
   if (!tx) return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -23,6 +43,9 @@ const OnlineTxDetails = () => {
     </div>
   );
 
+  const isSender = account && tx.sender?.toLowerCase() === account;
+  const isReceiver = account && tx.receiver?.toLowerCase() === account;
+
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       <Navbar />
@@ -38,11 +61,15 @@ const OnlineTxDetails = () => {
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Sender:</span>
-            <span className="break-all">{tx.sender}</span>
+            <span className="break-all">
+              {tx.sender} {isSender && <span className="text-green-400">(You)</span>}
+            </span>
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Receiver:</span>
-            <span className="break-all">{tx.receiver}</span>
+            <span className="break-all">
+              {tx.receiver} {isReceiver && <span className="text-blue-400">(You)</span>}
+            </span>
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Contract:</span>

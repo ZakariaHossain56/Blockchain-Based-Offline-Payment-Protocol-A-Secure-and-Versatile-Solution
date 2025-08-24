@@ -366,6 +366,71 @@ app.get("/api/loadTx/:contractAddress", (req, res) => {
   res.json(history);
 });
 
+
+// Fetch all transactions across all contracts
+app.get("/api/loadAllTx", (req, res) => {
+  try {
+    const allTx = readJSONFile(TX_FILE); // get the entire txHistory.json
+    let flattened = [];
+
+    // Flatten object { contractAddress: [tx1, tx2] } into a single array
+    Object.keys(allTx).forEach((contract) => {
+      const txs = allTx[contract];
+      if (Array.isArray(txs)) {
+        flattened = flattened.concat(txs.map(tx => ({ ...tx, contractAddress: contract })));
+      }
+    });
+
+    res.json(flattened);
+  } catch (err) {
+    console.error("❌ Error fetching all txs:", err);
+    res.status(500).json({ error: "Failed to fetch all transactions" });
+  }
+});
+
+
+// server.js (add after existing API routes)
+
+// Fetch online transactions directly from Ganache
+app.get("/api/onlineTx", async (req, res) => {
+  try {
+    const provider = new ethers.JsonRpcProvider("http://127.0.0.1:7545");
+    const latestBlock = await provider.getBlockNumber();
+    const numBlocks = 100; // last 100 blocks
+    const txs = [];
+
+    for (let i = latestBlock; i >= 0 && i > latestBlock - numBlocks; i--) {
+      const block = await provider.getBlock(i); // fetch block without transactions
+      const timestamp = block.timestamp * 1000;
+
+      for (const txHash of block.transactions) {
+        const tx = await provider.getTransaction(txHash); // fetch full tx details
+        txs.push({
+          hash: tx.hash,
+          sender: tx.from,
+          receiver: tx.to,
+          contractAddress: tx.to,
+          gasUsed: tx.gasLimit.toString(),
+          sentETH: ethers.formatEther(tx.value),
+          timestamp,
+          minedBlock: i,
+          txData: tx.data,
+        });
+      }
+    }
+
+    // Sort by most recent
+    txs.sort((a, b) => b.minedBlock - a.minedBlock);
+    res.json(txs);
+  } catch (err) {
+    console.error("❌ Error fetching Ganache transactions:", err);
+    res.status(500).json({ error: "Failed to fetch transactions from Ganache" });
+  }
+});
+
+
+
+
 // --- Start server ---
 const PORT = 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

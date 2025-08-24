@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Navbar, Footer } from "../components";
+import { ethers } from "ethers";
 
 const OfflineTxDetails = () => {
   const location = useLocation();
@@ -25,6 +26,10 @@ const OfflineTxDetails = () => {
       <Footer />
     </div>
   );
+
+  // Convert balances from wei-like strings to ETH
+  const senderBalanceETH = ethers.utils.formatEther(tx.balanceSender);
+  const receiverBalanceETH = ethers.utils.formatEther(tx.balanceReceiver);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
@@ -54,7 +59,7 @@ const OfflineTxDetails = () => {
         <div className="bg-gray-800 rounded-xl shadow-xl p-8 max-w-2xl w-full space-y-6">
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Tx Hash:</span>
-            <span className="break-all">{tx.hash}</span>
+            <span className="break-all">{tx.txHash}</span>
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Sender:</span>
@@ -66,11 +71,11 @@ const OfflineTxDetails = () => {
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Sender Balance:</span>
-            <span>{tx.senderBalance} ETH</span>
+            <span>{senderBalanceETH} ETH</span>
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Receiver Balance:</span>
-            <span>{tx.receiverBalance} ETH</span>
+            <span>{receiverBalanceETH} ETH</span>
           </div>
           <div className="flex justify-between border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400">Nonce:</span>
@@ -82,11 +87,11 @@ const OfflineTxDetails = () => {
           </div>
           <div className="flex flex-col border-b border-gray-700 pb-2">
             <span className="font-semibold text-gray-400 mb-1">Sender Signature:</span>
-            <span className="break-all">{tx.senderSignature}</span>
+            <span className="break-all">{tx.senderSig}</span>
           </div>
           <div className="flex flex-col">
             <span className="font-semibold text-gray-400 mb-1">Receiver Signature:</span>
-            <span className="break-all">{tx.receiverSignature}</span>
+            <span className="break-all">{tx.receiverSig}</span>
           </div>
 
           {coinForgery && (
