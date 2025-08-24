@@ -2,11 +2,13 @@ import { Navbar, Footer } from "../components";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ethers } from "ethers";
+import { contractABI } from "../utils/constants"; // import your ABI
 
 const OfflineTx = () => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState(null);
+  const [finalizing, setFinalizing] = useState(false);
 
   // Load currently connected account
   useEffect(() => {
@@ -34,11 +36,10 @@ const OfflineTx = () => {
 
     const fetchTxs = async () => {
       try {
-        const res = await fetch(`http://localhost:5000/api/loadAllTx`); // fetch all transactions from backend
+        const res = await fetch(`http://localhost:5000/api/loadAllTx`);
         const data = await res.json();
 
         if (Array.isArray(data)) {
-          // Filter by sender or receiver
           const filtered = data.filter(
             (tx) =>
               tx.sender?.toLowerCase() === account ||
@@ -59,6 +60,47 @@ const OfflineTx = () => {
     fetchTxs();
   }, [account]);
 
+  // Finalize all channels on-chain using MetaMask signer
+  const finalizeChannels = async () => {
+    if (!account || transactions.length === 0) return;
+    setFinalizing(true);
+
+    try {
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const signer = provider.getSigner();
+      const finalized = [];
+
+      for (const tx of transactions) {
+        const contract = new ethers.Contract(tx.contractAddress, contractABI, signer);
+
+        try {
+          const txResponse = await contract.submitFinalState(
+            tx.balanceSender,
+            tx.balanceReceiver,
+            tx.nonce,
+            tx.senderSig,
+            tx.receiverSig
+          );
+          const receipt = await txResponse.wait();
+          finalized.push({
+            contractAddress: tx.contractAddress,
+            txHash: receipt.transactionHash,
+          });
+        } catch (err) {
+          console.error(`❌ Failed to finalize channel ${tx.contractAddress}:`, err);
+        }
+      }
+
+      alert(`✅ Finalized ${finalized.length} channel(s) on-chain`);
+      console.log("Finalized channels:", finalized);
+    } catch (err) {
+      console.error("❌ Error finalizing channels:", err);
+      alert("Failed to finalize channels");
+    }
+
+    setFinalizing(false);
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       <Navbar />
@@ -66,6 +108,16 @@ const OfflineTx = () => {
         <h1 className="text-4xl font-bold text-center mb-10">
           Offline Transactions
         </h1>
+
+        <div className="text-center mb-6">
+          <button
+            onClick={finalizeChannels}
+            disabled={finalizing || !account || transactions.length === 0}
+            className="px-6 py-3 bg-indigo-500 hover:bg-indigo-600 rounded-lg font-semibold transition disabled:opacity-50"
+          >
+            {finalizing ? "Finalizing..." : "Finalize Channels"}
+          </button>
+        </div>
 
         {loading ? (
           <p className="text-center text-gray-400">Loading...</p>
@@ -81,7 +133,7 @@ const OfflineTx = () => {
 
               return (
                 <Link
-                  to={`/offline-tx/${tx.txHash}`} // optional: can navigate to details
+                  to={`/offline-tx/${tx.txHash}`}
                   state={{ tx }}
                   key={tx.txHash}
                   className="block bg-gray-800 p-6 rounded-2xl shadow-lg hover:shadow-2xl hover:scale-105 transform transition duration-300"

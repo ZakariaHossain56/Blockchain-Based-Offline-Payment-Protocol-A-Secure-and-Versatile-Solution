@@ -9,6 +9,7 @@ const path = require("path");
 const { ethers } = require("ethers");
 const app = express();
 const server = http.createServer(app);
+import { contractABI } from "../utils/constants.js"; // if you need ABI for reference
 
 
 
@@ -425,6 +426,55 @@ app.get("/api/onlineTx", async (req, res) => {
   } catch (err) {
     console.error("❌ Error fetching Ganache transactions:", err);
     res.status(500).json({ error: "Failed to fetch transactions from Ganache" });
+  }
+});
+
+
+
+
+// Finalize all channels for a given account (using JSON, no on-chain call)
+app.post("/api/finalizeChannels", (req, res) => {
+  try {
+    const { account } = req.body;
+    if (!account) return res.status(400).json({ error: "Account required" });
+
+    const allTxs = readJSONFile(TX_FILE); // load txHistory.json
+    const finalizedChannels = [];
+
+    // Iterate over all contracts
+    for (const contractAddr of Object.keys(allTxs)) {
+      const txs = allTxs[contractAddr];
+
+      // Filter txs where account is sender or receiver
+      const relevantTxs = txs.filter(
+        (tx) =>
+          tx.sender.toLowerCase() === account.toLowerCase() ||
+          tx.receiver.toLowerCase() === account.toLowerCase()
+      );
+
+      if (relevantTxs.length === 0) continue;
+
+      // Pick the tx with the latest nonce
+      const latestTx = relevantTxs.reduce((prev, curr) =>
+        curr.nonce > prev.nonce ? curr : prev
+      , relevantTxs[0]);
+
+      // Prepare the finalized channel state
+      finalizedChannels.push({
+        contractAddress: contractAddr,
+        balanceSender: latestTx.balanceSender,
+        balanceReceiver: latestTx.balanceReceiver,
+        nonce: latestTx.nonce,
+        senderSig: latestTx.senderSig,
+        receiverSig: latestTx.receiverSig,
+        txHash: latestTx.txHash,
+      });
+    }
+
+    return res.json({ success: true, finalizedChannels });
+  } catch (err) {
+    console.error("❌ Error finalizing channels:", err);
+    return res.status(500).json({ error: "Failed to finalize channels", details: err.message });
   }
 });
 
