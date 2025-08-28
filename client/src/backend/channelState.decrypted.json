@@ -2,8 +2,8 @@
   "0x065bb3632ad12c8fd840335da2e9f38e08bcd6a9": {
     "sender": "0x78d987bd9fa200649669feb39674980bc632d96f",
     "receiver": "0x33195a444beb51e19ae9dbc154e8dabf46d90b97",
-    "balanceSender": "30000000000000000",
-    "balanceReceiver": "80000000000000000",
-    "nonce": 12
+    "balanceSender": "60000000000000000",
+    "balanceReceiver": "50000000000000000",
+    "nonce": 9
   }
 }

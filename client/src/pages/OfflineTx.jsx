@@ -159,8 +159,12 @@ const OfflineTx = () => {
                   </p>
 
                   <div className="mt-4 flex justify-between text-sm">
-                    <span className="text-green-400">Balance: {tx.balanceSender}</span>
-                    <span className="text-blue-400">Balance: {tx.balanceReceiver}</span>
+                    <span className="text-green-400">
+                      Sender Bal: {ethers.utils.formatEther(tx.balanceSender)} ETH
+                    </span>
+                    <span className="text-blue-400">
+                      Receiver Bal: {ethers.utils.formatEther(tx.balanceReceiver)} ETH
+                    </span>
                   </div>
                 </Link>
               );
