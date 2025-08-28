@@ -3,12 +3,48 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ethers } from "ethers";
 import { contractABI } from "../utils/constants"; // import your ABI
+import { io } from "socket.io-client";
 
 const OfflineTx = () => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState(null);
   const [finalizing, setFinalizing] = useState(false);
+  const [isSettled, setIsSettled] = useState(false);
+
+
+
+
+
+const socket = io("http://localhost:5000"); // your backend URL
+
+useEffect(() => {
+  if (!account) return;
+
+  // register account with backend
+  socket.emit("register", account);
+
+  // listen for settlement
+  socket.on("channelSettled", (msg) => {
+    console.log("🔔 Settlement message:", msg);
+
+    alert(`✅ Channel finalized for contract ${msg.contractAddress}`);
+
+    // update UI (optional: mark tx as settled)
+    setTransactions((prev) =>
+      prev.map((tx) =>
+        tx.contractAddress.toLowerCase() === msg.contractAddress.toLowerCase()
+          ? { ...tx, settled: true }
+          : tx
+      )
+    );
+  });
+
+  return () => {
+    socket.off("channelSettled");
+  };
+}, [account]);
+
 
   // Load currently connected account
   useEffect(() => {
@@ -60,46 +96,75 @@ const OfflineTx = () => {
     fetchTxs();
   }, [account]);
 
+
+  async function getBalances(provider, addrA, addrB) {
+    const bA = await provider.getBalance(addrA);
+    const bB = await provider.getBalance(addrB);
+    return {
+      balanceA: ethers.utils.formatEther(bA),
+      balanceB: ethers.utils.formatEther(bB)
+    };
+  }
+
+
+
   // Finalize all channels on-chain using MetaMask signer
-  const finalizeChannels = async () => {
-    if (!account || transactions.length === 0) return;
-    setFinalizing(true);
+  async function finalizeChannels(transactions) {
+    if (!window.ethereum) throw new Error("No wallet");
 
-    try {
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
-      const signer = provider.getSigner();
-      const finalized = [];
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    const signer = provider.getSigner();
 
-      for (const tx of transactions) {
-        const contract = new ethers.Contract(tx.contractAddress, contractABI, signer);
-
-        try {
-          const txResponse = await contract.submitFinalState(
-            tx.balanceSender,
-            tx.balanceReceiver,
-            tx.nonce,
-            tx.senderSig,
-            tx.receiverSig
-          );
-          const receipt = await txResponse.wait();
-          finalized.push({
-            contractAddress: tx.contractAddress,
-            txHash: receipt.transactionHash,
-          });
-        } catch (err) {
-          console.error(`❌ Failed to finalize channel ${tx.contractAddress}:`, err);
-        }
+    // pick highest nonce per contract
+    const byContract = {};
+    for (const tx of transactions) {
+      const c = tx.contractAddress.toLowerCase();
+      if (!byContract[c] || Number(tx.nonce) > Number(byContract[c].nonce)) {
+        byContract[c] = tx;
       }
-
-      alert(`✅ Finalized ${finalized.length} channel(s) on-chain`);
-      console.log("Finalized channels:", finalized);
-    } catch (err) {
-      console.error("❌ Error finalizing channels:", err);
-      alert("Failed to finalize channels");
     }
 
-    setFinalizing(false);
-  };
+    const results = [];
+    for (const contractAddress of Object.keys(byContract)) {
+      const tx = byContract[contractAddress];
+      const contract = new ethers.Contract(contractAddress, contractABI, signer);
+
+      try {
+        const balanceA = ethers.BigNumber.from(tx.balanceSender.toString());
+        const balanceB = ethers.BigNumber.from(tx.balanceReceiver.toString());
+        const nonce = ethers.BigNumber.from(tx.nonce);
+
+        const txResponse = await contract.submitFinalState(
+          balanceA,
+          balanceB,
+          nonce,
+          tx.senderSig,
+          tx.receiverSig
+        );
+        const receipt = await txResponse.wait();
+
+        // balances after settlement
+        const { balanceA: newA, balanceB: newB } = await getBalances(
+          provider,
+          tx.sender,
+          tx.receiver
+        );
+
+        results.push({
+          contractAddress,
+          txHash: receipt.transactionHash,
+          balances: { sender: newA, receiver: newB }
+        });
+      } catch (err) {
+        console.error("❌ Failed to finalize", contractAddress, err);
+      }
+    }
+
+    return results;
+  }
+
+
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
@@ -110,13 +175,47 @@ const OfflineTx = () => {
         </h1>
 
         <div className="text-center mb-6">
+
+
           <button
-            onClick={finalizeChannels}
-            disabled={finalizing || !account || transactions.length === 0}
-            className="px-6 py-3 bg-indigo-500 hover:bg-indigo-600 rounded-lg font-semibold transition disabled:opacity-50"
-          >
-            {finalizing ? "Finalizing..." : "Finalize Channels"}
-          </button>
+  onClick={async () => {
+    if (!account || transactions.length === 0 || isSettled) return;
+
+    setFinalizing(true);
+    try {
+      // 👉 Use your finalizeChannels helper
+      const results = await finalizeChannels(transactions);
+
+      // notify receiver via socket
+for (const result of results) {
+  socketRef.current.emit("channelFinalized", {
+    contractAddress: result.contractAddress,
+    sender: account,
+    receiver: transactions.find(
+      (tx) => tx.contractAddress.toLowerCase() === result.contractAddress.toLowerCase()
+    )?.receiver,
+  });
+}
+
+
+
+      console.log("✅ Settlement complete", results);
+      setIsSettled(true); // disable button after settlement
+    } catch (err) {
+      console.error("❌ Error during final settlement:", err);
+    }
+    setFinalizing(false);
+  }}
+  disabled={finalizing || !account || transactions.length === 0 || isSettled}
+  className="px-6 py-3 bg-indigo-500 hover:bg-indigo-600 rounded-lg font-semibold transition disabled:opacity-50"
+>
+  {isSettled ? "Settled ✅" : finalizing ? "Finalizing..." : "Finalize Channels"}
+</button>
+
+
+
+
+
         </div>
 
         {loading ? (

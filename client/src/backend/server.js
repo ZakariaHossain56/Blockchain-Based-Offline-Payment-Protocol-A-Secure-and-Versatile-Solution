@@ -300,18 +300,14 @@ socket.on("receiverFunded", (data) => {
 
 
 
-
-
-
-
-  socket.on("microTxProposed", (proposal) => {
+socket.on("microTxProposed", (proposal) => {
     const receiver = proposal.receiver.toLowerCase();
     io.to(receiver).emit("microTxProposed", proposal);
 
     console.log(`📢 MicroTx proposed from ${proposal.sender} to ${proposal.receiver}`);
     console.log(`   Amount: ${proposal.sentAmount} ETH`);
     console.log(`   Next balances -> Sender: ${proposal.balanceSender}, Receiver: ${proposal.balanceReceiver}`);
-  });
+});
 
 
   socket.on("microTxAccepted", (txRecord) => {
@@ -354,6 +350,22 @@ socket.on("receiverFunded", (data) => {
     io.to(state.sender).emit("microTxAccepted", txRecord);
     io.to(state.receiver).emit("microTxAccepted", txRecord);
   });
+
+
+  // Notify receiver that a channel has been finalized
+socket.on("channelFinalized", ({ contractAddress, sender, receiver }) => {
+    io.to(receiver.toLowerCase()).emit("channelSettled", {
+      contractAddress,
+      sender,
+      receiver,
+      message: "Channel has been finalized",
+    });
+
+    console.log(
+      `📢 Channel ${contractAddress} finalized. Notified receiver ${receiver}`
+    );
+  });
+
 
 
 
