@@ -8,18 +8,17 @@ contract BidirectionalPaymentChannel {
     uint256 public depositA;
     uint256 public depositB;
     bool public isClosed;
-    bool public isActive;  // channel is active only after both parties have funded
-    uint256 public round;   // session counter
+    bool public isActive;  // channel is active only after B funds
+    bool public isSettled; // ✅ prevent double settlement
 
-    // usedStates per round to prevent replay across sessions
-    mapping(uint256 => mapping(bytes32 => bool)) public usedStates;
+
+    mapping(bytes32 => bool) public usedStates;
     mapping(address => uint256) public pendingWithdrawals;
 
     event ChannelRequested(address indexed from, address indexed to, uint256 amount);
     event ChannelFunded(address indexed from, uint256 amount);
-    event ChannelReopened(uint256 round, uint256 expiryTime, uint256 depositA, uint256 depositB);
-    event ChannelClosed(uint256 balanceA, uint256 balanceB, uint256 round);
-    event FinalStateSubmitted(address submitter, uint256 balanceA, uint256 balanceB, uint256 round);
+    event ChannelClosed(uint256 balanceA, uint256 balanceB);
+    event FinalStateSubmitted(address submitter, uint256 balanceA, uint256 balanceB);
     event Withdrawal(address indexed who, uint256 amount);
     event PaymentAttempt(address indexed to, uint256 amount, bool success);
 
@@ -43,7 +42,7 @@ contract BidirectionalPaymentChannel {
         _;
     }
 
-    /// Constructor: Party A deploys and funds the contract; pass partyB and initial duration (seconds)
+    // Constructor: Party A funds and requests channel
     constructor(address _partyB, uint256 _duration) payable {
         require(msg.value > 0, "A must deposit funds");
         partyA = msg.sender;
@@ -51,97 +50,54 @@ contract BidirectionalPaymentChannel {
         depositA = msg.value;
         expiryTime = block.timestamp + _duration;
         isActive = false;
-        isClosed = false;
-        round = 1;
         emit ChannelRequested(partyA, partyB, msg.value);
     }
 
-    /// General fund function: either participant can top-up their deposit
-    function fundChannel() external payable onlyParticipants {
-        require(msg.value > 0, "Must send ETH to fund");
-
-        if (msg.sender == partyA) {
-            depositA += msg.value;
-        } else {
-            depositB += msg.value;
-        }
-
-        // activate if both deposits present
-        if (depositA > 0 && depositB > 0) {
-            isActive = true;
-            isClosed = false;
-        }
-
-        emit ChannelFunded(msg.sender, msg.value);
-    }
-
-    /// Backwards-compatible helper for your frontend
+    // Receiver funds the channel
     function fundReceiver() external payable {
         require(msg.sender == partyB, "Only receiver can fund");
+        require(!isActive, "Channel already active");
         require(msg.value > 0, "Receiver must deposit funds");
-        depositB += msg.value;
 
-        if (depositA > 0 && depositB > 0) {
-            isActive = true;
-            isClosed = false;
-        }
-
-        emit ChannelFunded(partyB, msg.value);
-    }
-
-    /// Reopen a new session (round). Caller may send ETH to top up their deposit.
-    /// _duration is seconds from now for the new expiry.
-    function reopenChannel(uint256 _duration) external payable onlyParticipants {
-        require(isClosed || !isActive, "Channel currently active");
-
-        if (msg.value > 0) {
-            if (msg.sender == partyA) depositA += msg.value;
-            else depositB += msg.value;
-        }
-
-        // require both parties have deposits to open
-        require(depositA > 0 && depositB > 0, "Both parties must have deposits to reopen");
-
-        round += 1;
-        expiryTime = block.timestamp + _duration;
-        isClosed = false;
+        depositB = msg.value;
         isActive = true;
 
-        emit ChannelReopened(round, expiryTime, depositA, depositB);
+        emit ChannelFunded(partyB, depositB);
     }
 
-    /// Final settlement for the current round. State hash includes `round`.
-    function submitFinalState(
-        uint256 balanceA,
-        uint256 balanceB,
-        uint256 nonce,
-        bytes memory sigA,
-        bytes memory sigB
-    ) external onlyParticipants onlyIfActive onlyIfNotClosed {
-        // include round so states cannot be replayed across sessions
-        bytes32 stateHash = keccak256(abi.encodePacked(balanceA, balanceB, nonce, address(this), round));
-        require(!usedStates[round][stateHash], "State already used");
-        usedStates[round][stateHash] = true;
+    // Final settlement after off-chain transactions
+function submitFinalState(
+    uint256 balanceA,
+    uint256 balanceB,
+    uint256 nonce,
+    bytes memory sigA,
+    bytes memory sigB
+) external onlyParticipants onlyIfActive onlyIfNotClosed {
+    require(!isSettled, "Channel already settled"); // ✅ new guard
 
-        require(recoverSigner(stateHash, sigA) == partyA, "Invalid signature for Party A");
-        require(recoverSigner(stateHash, sigB) == partyB, "Invalid signature for Party B");
+    bytes32 stateHash = keccak256(
+        abi.encodePacked(balanceA, balanceB, nonce, address(this))
+    );
+    require(!usedStates[stateHash], "State already used");
+    usedStates[stateHash] = true;
 
-        uint256 totalRequested = balanceA + balanceB;
-        require(totalRequested <= address(this).balance, "Invalid balances: not enough funds in contract");
+    require(recoverSigner(stateHash, sigA) == partyA, "Invalid signature for Party A");
+    require(recoverSigner(stateHash, sigB) == partyB, "Invalid signature for Party B");
 
-        // attempt direct payout; if fails, credit pendingWithdrawals
-        _attemptPay(partyA, balanceA);
-        _attemptPay(partyB, balanceB);
+    uint256 totalRequested = balanceA + balanceB;
+    require(totalRequested <= address(this).balance, "Invalid balances: not enough funds in contract");
 
-        // close this round and zero deposits so reopen requires fresh funding
-        isClosed = true;
-        isActive = false;
-        depositA = 0;
-        depositB = 0;
+    // ✅ Perform final settlement
+    _attemptPay(partyA, balanceA);
+    _attemptPay(partyB, balanceB);
 
-        emit FinalStateSubmitted(msg.sender, balanceA, balanceB, round);
-        emit ChannelClosed(balanceA, balanceB, round);
-    }
+    isClosed = true;
+    isSettled = true; // ✅ permanently lock channel
+
+    emit FinalStateSubmitted(msg.sender, balanceA, balanceB);
+    emit ChannelClosed(balanceA, balanceB);
+}
+
 
     function _attemptPay(address recipient, uint256 amount) internal {
         if (amount == 0) {
@@ -149,6 +105,7 @@ contract BidirectionalPaymentChannel {
             return;
         }
 
+        // Use call to forward all gas, but check result. If it fails, credit for withdrawal.
         (bool success, ) = payable(recipient).call{value: amount}("");
         if (!success) {
             pendingWithdrawals[recipient] += amount;
@@ -158,21 +115,21 @@ contract BidirectionalPaymentChannel {
         }
     }
 
-    /// Withdraw funds credited due to failed push or timeout
+    // Withdraw function (pull) for recipients if call failed or they prefer withdrawal pattern
     function withdraw() external {
         uint256 amount = pendingWithdrawals[msg.sender];
         require(amount > 0, "No funds to withdraw");
+        // effects before interaction
         pendingWithdrawals[msg.sender] = 0;
         (bool success, ) = payable(msg.sender).call{value: amount}("");
         require(success, "Withdraw failed");
         emit Withdrawal(msg.sender, amount);
     }
 
-    /// Emergency withdrawal after expiry if final settlement not submitted
+    // Emergency withdrawal after expiry if final settlement not submitted
     function timeoutWithdraw() external onlyParticipants onlyIfExpired onlyIfNotClosed {
         isClosed = true;
-        isActive = false;
-
+        // credit pending withdrawals instead of immediate transfer for safety
         if (depositA > 0) {
             (bool okA, ) = payable(partyA).call{value: depositA}("");
             if (!okA) pendingWithdrawals[partyA] += depositA;
@@ -181,14 +138,10 @@ contract BidirectionalPaymentChannel {
             (bool okB, ) = payable(partyB).call{value: depositB}("");
             if (!okB) pendingWithdrawals[partyB] += depositB;
         }
-
-        depositA = 0;
-        depositB = 0;
-
-        emit ChannelClosed(depositA, depositB, round);
+        emit ChannelClosed(depositA, depositB);
     }
 
-    // helpers for signature recovery (personal_sign style)
+    // Signature recovery
     function recoverSigner(bytes32 message, bytes memory sig) internal pure returns (address) {
         bytes32 ethSignedMessage = prefixed(message);
         (uint8 v, bytes32 r, bytes32 s) = splitSignature(sig);
@@ -204,20 +157,19 @@ contract BidirectionalPaymentChannel {
         bytes32 r;
         bytes32 s;
         uint8 v;
+
         assembly {
             r := mload(add(sig, 32))
             s := mload(add(sig, 64))
             v := byte(0, mload(add(sig, 96)))
         }
+
         if (v < 27) v += 27;
         require(v == 27 || v == 28, "Invalid v");
+
         return (v, r, s);
     }
 
-    /// UI helper: contract balance
-    function contractBalance() external view returns (uint256) {
-        return address(this).balance;
-    }
-
+    // Fallback to accept Ether
     receive() external payable {}
 }
