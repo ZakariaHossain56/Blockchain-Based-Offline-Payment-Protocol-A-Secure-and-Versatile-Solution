@@ -227,18 +227,18 @@ export default function Welcome() {
 
 
 
-    socket.on("channelDestroyed", (contractAddress) => {
-      if (
-        (currentDeployment && currentDeployment.contractAddress === contractAddress) ||
-        (incomingDeployment && incomingDeployment.contractAddress === contractAddress)
-      ) {
-        alert("⚠️ Channel has been destroyed.");
-        setCurrentDeployment(null);
-        setIncomingDeployment(null);
-        setChannelState(null);
-        setTxHistory([]);
-      }
-    });
+    socket.on("channelDestroyed", ({ contractAddress }) => {
+  if (currentDeployment?.contractAddress === contractAddress ||
+      incomingDeployment?.contractAddress === contractAddress) {
+    alert("⚠️ Channel has been destroyed.");
+    setCurrentDeployment(null);
+    setIncomingDeployment(null);
+    setChannelState(null);
+    setTxHistory([]);
+  }
+});
+
+
 
     // MicroTx events remain unchanged
     socket.on("microTxProposed", async (proposal) => {
@@ -440,6 +440,8 @@ export default function Welcome() {
     toast.info("📤 Deployment request sent. Waiting for receiver acknowledgement.");
   };
 
+
+
   // Receiver accepts deployment (sends ack back)
   const acceptDeploymentAck = () => {
     if (!incomingDeployment || !receiverFunding || Number(receiverFunding) <= 0) {
@@ -465,6 +467,15 @@ export default function Welcome() {
       accepted: true, // <-- This enables microtransaction form
     });
 
+    // --- Immediately set initial channel state for receiver ---
+  // setChannelState({
+  //   sender: incomingDeployment.sender,
+  //   receiver:incomingDeployment.receiver,
+  //   balanceSender: incomingDeployment.fundingAmount, // sender's initial funding
+  //   balanceReceiver: receiverFunding,               // receiver's funding
+  //   nonce: 0,
+  // });
+
     // Clear receiver UI
     setIncomingDeployment(null);
     setReceiverFunding("");
@@ -476,66 +487,114 @@ export default function Welcome() {
   //actual contract deployment function
   // Party A: deploy and notify Party B
   const deployChannelContract = async (deploymentData) => {
-    try {
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
-      const signer = provider.getSigner();
+  try {
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    const signer = provider.getSigner();
 
-      const factory = new ethers.ContractFactory(contractABI, contractBytecode, signer);
+    const factory = new ethers.ContractFactory(contractABI, contractBytecode, signer);
 
-      const network = await provider.getNetwork();
-      console.log("Connected network:", network);
+    console.log("Checking sender balance...");
+    const balanceWei = await provider.getBalance(deploymentData.sender);
+    const balanceEth = ethers.utils.formatEther(balanceWei);
+    console.log(`Account ${deploymentData.sender} balance: ${balanceEth} ETH`);
 
-      console.log("Checking sender balance...");
-      const balanceWei = await provider.getBalance(deploymentData.sender);
-      // Convert to ETH
-      const balanceEth = ethers.utils.formatEther(balanceWei);
-      console.log(`Account ${deploymentData.sender} balance: ${balanceEth} ETH`);
+    console.log("fundingAmount:", deploymentData.fundingAmount);
 
-      // Deploy contract with sender funding
-      const contract = await factory.deploy(
-        deploymentData.receiver,                  // _partyB
-        deploymentData.duration,                  // _duration
-        {
-          value: ethers.utils.parseEther(deploymentData.fundingAmount.toString()),
-        }
-      );
+    // Deploy contract with sender funding
+    const contract = await factory.deploy(
+      deploymentData.receiver,
+      deploymentData.duration,
+      {
+        value: ethers.utils.parseEther(deploymentData.fundingAmount.toString()),
+      }
+    );
 
-      await contract.deployed();
+    await contract.deployed();
 
-      toast.success(`✅ Channel deployed at ${contract.address}`);
+    toast.success(`✅ Channel deployed at ${contract.address}`);
+    console.log("Channel deployed:", contract.address);
 
-      console.log("deployChannelContract called with data:");
-      console.log("Sender : ", deploymentData.sender);
-      console.log("Receiver : ", deploymentData.receiver);
-
-      // Save initial state to backend
-      await fetch("http://localhost:5000/api/updateChannelState", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contractAddress: contract.address,
-          sender: deploymentData.sender,
-          receiver: deploymentData.receiver,
-          balanceSender: deploymentData.fundingAmount,
-          balanceReceiver: deploymentData.receiverFunding,
-          nonce: 0,
-        }),
-      });
-
-      // Notify Party B via socket
-      socket.emit("contractDeployed", {
+    // Save initial channel state to backend
+    await fetch("http://localhost:5000/api/updateChannelState", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contractAddress: contract.address,
         sender: deploymentData.sender,
         receiver: deploymentData.receiver,
-        contractAddress: contract.address,
-        receiverFunding: deploymentData.receiverFunding,
-      });
+        balanceSender: deploymentData.fundingAmount,
+        balanceReceiver: deploymentData.receiverFunding,
+        nonce: 0,
+      }),
+    });
 
-      return contract.address;
-    } catch (err) {
-      console.error("❌ Deployment failed:", err);
-      toast.error("❌ Deployment failed");
+    // Notify receiver
+    socket.emit("contractDeployed", {
+      sender: deploymentData.sender,
+      receiver: deploymentData.receiver,
+      contractAddress: contract.address,
+      receiverFunding: deploymentData.receiverFunding,
+    });
+
+    // ✅ Show MicroTx form immediately at sender's side
+    // setCurrentDeployment({
+    //   sender: deploymentData.sender,
+    //   receiver: deploymentData.receiver,
+    //   contractAddress: contract.address,
+    //   accepted: true, // this triggers the microTx form
+    // });
+
+    // Also initialize channel state locally
+    // setChannelState({
+    //   sender: deploymentData.sender,
+    //   receiver: deploymentData.receiver,
+    //   balanceSender: deploymentData.fundingAmount,
+    //   balanceReceiver: deploymentData.receiverFunding,
+    //   nonce: 0,
+    // });
+
+    ///console.log("Deployment data:", deploymentData);
+    
+
+    return contract.address;
+  } catch (err) {
+    console.error("❌ Deployment failed:", err);
+    toast.error("❌ Deployment failed");
+  }
+};
+
+
+const destroyChannel = async () => {
+  if (!currentDeployment?.contractAddress) {
+    toast.error("No active channel to destroy");
+    return;
+  }
+
+  try {
+    const res = await fetch("http://localhost:5000/api/destroyChannel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contractAddress: currentDeployment.contractAddress,
+        account: currentAccount, // which wallet is requesting destruction
+      }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      toast.success("🔥 Channel destroyed successfully");
+      setCurrentDeployment(null);
+      setChannelState(null);
+      setTxHistory([]);
+    } else {
+      toast.error("❌ Failed to destroy channel");
     }
-  };
+  } catch (err) {
+    console.error("Destroy channel error:", err);
+    toast.error("❌ Error destroying channel");
+  }
+};
+
 
 
 
@@ -884,43 +943,57 @@ export default function Welcome() {
                 )} */}
 
                 {/* Microtransaction Form */}
-                {currentDeployment && channelState && (
-                  <div className="p-5 sm:w-96 w-full flex flex-col justify-start items-center blue-glassmorphism">
-                    <form onSubmit={handleSubmit}>
-                      <Input
-                        placeholder="Amount (ETH)"
-                        name="amount"
-                        type="number"
-                        step="0.0001"
-                        value={formData.amount || ""}
-                        handleChange={handleFormChange} // updates formData
-                      />
-                      <button
-                        type="submit" // no onClick needed
-                        className="mt-4 bg-green-600 hover:bg-green-500 px-6 py-2 rounded text-white font-semibold w-full"
-                      >
-                        Send MicroTx
-                      </button>
-                    </form>
-                    <div className="mt-3 text-white">
-                      <p>
-                        Sender Balance:{" "}
-                        {channelState?.balanceSender
-                          ? ethers.utils.formatEther(channelState.balanceSender.toString())
-                          : "0"}{" "}
-                        ETH
-                      </p>
-                      <p>
-                        Receiver Balance:{" "}
-                        {channelState?.balanceReceiver
-                          ? ethers.utils.formatEther(channelState.balanceReceiver.toString())
-                          : "0"}{" "}
-                        ETH
-                      </p>
-                      <p>Nonce: {channelState.nonce}</p>
-                    </div>
-                  </div>
-                )}
+{currentDeployment && channelState && (
+  <div className="p-5 sm:w-96 w-full flex flex-col justify-start items-center blue-glassmorphism">
+    <form onSubmit={handleSubmit} className="w-full">
+      <Input
+        placeholder="Amount (ETH)"
+        name="amount"
+        type="number"
+        step="0.0001"
+        value={formData.amount || ""}
+        handleChange={handleFormChange} // updates formData
+      />
+      <button
+        type="submit"
+        className="mt-4 bg-green-600 hover:bg-green-500 px-6 py-2 rounded text-white font-semibold w-full"
+      >
+        Send MicroTx
+      </button>
+    </form>
+
+    {/* Channel State Display */}
+    <div className="mt-3 text-white w-full">
+      <p>
+        Sender Balance:{" "}
+        {channelState?.balanceSender
+          ? ethers.utils.formatEther(channelState.balanceSender.toString())
+          : "0"}{" "}
+        ETH
+      </p>
+      <p>
+        Receiver Balance:{" "}
+        {channelState?.balanceReceiver
+          ? ethers.utils.formatEther(channelState.balanceReceiver.toString())
+          : "0"}{" "}
+        ETH
+      </p>
+      <p>Nonce: {channelState.nonce}</p>
+    </div>
+
+    {/* Destroy Channel Button */}
+    <button
+      type="button"
+      onClick={destroyChannel} // your on-chain destroy logic
+      className="mt-4 bg-red-600 hover:bg-red-500 px-6 py-2 rounded text-white font-semibold w-full"
+    >
+      🔥 Destroy Channel
+    </button>
+  </div>
+)}
+
+
+
 
 
                 {/* Pending Proposal */}

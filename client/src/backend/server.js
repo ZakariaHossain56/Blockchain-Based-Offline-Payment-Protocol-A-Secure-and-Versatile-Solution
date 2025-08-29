@@ -261,6 +261,88 @@ const loadTxHistory = (contractAddress) => {
 };
 
 
+function safeReadJSON(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const content = fs.readFileSync(filePath, "utf8").trim();
+  if (!content) return {}; // empty file
+  try {
+    return JSON.parse(content);
+  } catch (err) {
+    console.error("Invalid JSON in", filePath, err);
+    return {};
+  }
+}
+
+
+// server.js (or routes file)
+app.post("/api/destroyChannel", (req, res) => {
+  try {
+    const { contractAddress, account } = req.body;
+
+    if (!contractAddress) {
+      return res.status(400).json({ success: false, error: "Missing contractAddress" });
+    }
+
+    const addr = contractAddress.toLowerCase();
+
+    // --- Load channels safely ---
+    const channels = safeReadJSON(CHANNEL_FILE);
+
+    if (!channels[addr]) {
+      return res.status(404).json({ success: false, error: "Channel not found" });
+    }
+
+    // ✅ Verify caller is sender or receiver
+    const channel = channels[addr];
+    if (
+      channel.sender.toLowerCase() !== account.toLowerCase() &&
+      channel.receiver.toLowerCase() !== account.toLowerCase()
+    ) {
+      return res.status(403).json({ success: false, error: "Not authorized to destroy this channel" });
+    }
+
+    // --- Delete from CHANNEL_FILE ---
+    delete channels[addr];
+    fs.writeFileSync(CHANNEL_FILE, JSON.stringify(channels, null, 2));
+
+    // --- Delete from TX_FILE safely ---
+    const txs = safeReadJSON(TX_FILE);
+    if (txs[addr]) {
+      delete txs[addr];
+      fs.writeFileSync(TX_FILE, JSON.stringify(txs, null, 2));
+    }
+
+    // --- Notify via socket ---
+    // --- Notify both parties via socket ---
+    io.to(channel.sender.toLowerCase()).emit("channelDestroyed", { contractAddress: addr });
+    io.to(channel.receiver.toLowerCase()).emit("channelDestroyed", { contractAddress: addr });
+    console.log(`🔥 Channel destroyed: ${addr}, both parties notified.`);
+
+    console.log(`🔥 Channel destroyed: ${addr}`);
+
+    return res.json({ success: true, contractAddress: addr });
+  } catch (err) {
+    console.error("Destroy channel failed:", err);
+    return res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Get all accounts
+app.get("/api/accounts", (req, res) => {
+  try {
+    const accounts = fs.existsSync(ACCOUNTS_FILE)
+      ? JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf8"))
+      : {};
+    res.json(accounts);
+  } catch (err) {
+    console.error("Failed to read accounts:", err);
+    res.status(500).json({ error: "Failed to load accounts" });
+  }
+});
+
+
+
+
 // --- Socket.IO ---
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
@@ -380,10 +462,10 @@ socket.on("channelFinalized", ({ contractAddress, sender, receiver }) => {
 
 
 
-  socket.on("channelDestroyed", (contractAddress) => {
-    io.emit("channelDestroyed", contractAddress); // notify all
-    console.log(`Channel destroyed: ${contractAddress}`);
-  });
+  // socket.on("channelDestroyed", (contractAddress) => {
+  //   io.emit("channelDestroyed", contractAddress); // notify all
+  //   console.log(`Channel destroyed: ${contractAddress}`);
+  // });
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
