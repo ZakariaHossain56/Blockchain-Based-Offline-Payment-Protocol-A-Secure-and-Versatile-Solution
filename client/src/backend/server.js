@@ -364,6 +364,17 @@ socket.on("channelFinalized", ({ contractAddress, sender, receiver }) => {
     console.log(
       `📢 Channel ${contractAddress} finalized. Notified receiver ${receiver}`
     );
+
+     // Clear channelState.json and txHistory.json
+  try {
+    fs.writeFileSync(CHANNEL_FILE, JSON.stringify([]));
+    fs.writeFileSync(TX_FILE, JSON.stringify([]));
+    console.log("✅ Cleared channelState.json and txHistory.json");
+  } catch (err) {
+    console.error("❌ Failed to clear JSON files:", err);
+  }
+
+
   });
 
 

@@ -38,6 +38,19 @@ useEffect(() => {
           : tx
       )
     );
+
+// ✅ disable button if the settled channel involves this account
+  if (
+    transactions.some(
+      (tx) =>
+        tx.contractAddress.toLowerCase() === msg.contractAddress.toLowerCase() &&
+        (tx.sender.toLowerCase() === account || tx.receiver.toLowerCase() === account)
+    )
+  ) {
+    setIsSettled(true);
+  }
+
+
   });
 
   return () => {
@@ -109,60 +122,79 @@ useEffect(() => {
 
 
   // Finalize all channels on-chain using MetaMask signer
-  async function finalizeChannels(transactions) {
-    if (!window.ethereum) throw new Error("No wallet");
+  // Finalize all channels on-chain using MetaMask signer
+async function finalizeChannels(transactions) {
+  if (!window.ethereum) throw new Error("No wallet");
 
-    const provider = new ethers.providers.Web3Provider(window.ethereum);
-    await provider.send("eth_requestAccounts", []);
-    const signer = provider.getSigner();
+  const provider = new ethers.providers.Web3Provider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  const signer = provider.getSigner();
 
-    // pick highest nonce per contract
-    const byContract = {};
-    for (const tx of transactions) {
-      const c = tx.contractAddress.toLowerCase();
-      if (!byContract[c] || Number(tx.nonce) > Number(byContract[c].nonce)) {
-        byContract[c] = tx;
-      }
+  // pick highest nonce per contract
+  const byContract = {};
+  for (const tx of transactions) {
+    const c = tx.contractAddress.toLowerCase();
+    if (!byContract[c] || Number(tx.nonce) > Number(byContract[c].nonce)) {
+      byContract[c] = tx;
     }
+  }
 
-    const results = [];
-    for (const contractAddress of Object.keys(byContract)) {
-      const tx = byContract[contractAddress];
-      const contract = new ethers.Contract(contractAddress, contractABI, signer);
+  const results = [];
+  for (const contractAddress of Object.keys(byContract)) {
+    const tx = byContract[contractAddress];
+    const contract = new ethers.Contract(contractAddress, contractABI, signer);
 
+    try {
+      const balanceA = ethers.BigNumber.from(tx.balanceSender.toString());
+      const balanceB = ethers.BigNumber.from(tx.balanceReceiver.toString());
+      const nonce = ethers.BigNumber.from(tx.nonce);
+
+      // 👉 balances before settlement
+      const beforeBalances = await getBalances(provider, tx.sender, tx.receiver);
+
+      // 👉 simulate call first (to catch revert reason before sending real tx)
       try {
-        const balanceA = ethers.BigNumber.from(tx.balanceSender.toString());
-        const balanceB = ethers.BigNumber.from(tx.balanceReceiver.toString());
-        const nonce = ethers.BigNumber.from(tx.nonce);
-
-        const txResponse = await contract.submitFinalState(
+        await contract.callStatic.submitFinalState(
           balanceA,
           balanceB,
           nonce,
           tx.senderSig,
           tx.receiverSig
         );
-        const receipt = await txResponse.wait();
-
-        // balances after settlement
-        const { balanceA: newA, balanceB: newB } = await getBalances(
-          provider,
-          tx.sender,
-          tx.receiver
-        );
-
-        results.push({
-          contractAddress,
-          txHash: receipt.transactionHash,
-          balances: { sender: newA, receiver: newB }
-        });
       } catch (err) {
-        console.error("❌ Failed to finalize", contractAddress, err);
+        console.error("🚨 Simulation failed:", err.reason || err.message);
+        continue; // skip this contract, don’t send failing tx
       }
-    }
 
-    return results;
+      // send real tx
+      const txResponse = await contract.submitFinalState(
+        balanceA,
+        balanceB,
+        nonce,
+        tx.senderSig,
+        tx.receiverSig
+      );
+      const receipt = await txResponse.wait();
+
+      // 👉 balances after settlement
+      const afterBalances = await getBalances(provider, tx.sender, tx.receiver);
+
+      results.push({
+        contractAddress,
+        txHash: receipt.transactionHash,
+        balances: {
+          before: beforeBalances,
+          after: afterBalances,
+        },
+      });
+    } catch (err) {
+      console.error("❌ Failed to finalize", contractAddress, err);
+    }
   }
+
+  return results;
+}
+
 
 
 
@@ -188,13 +220,24 @@ useEffect(() => {
 
       // notify receiver via socket
 for (const result of results) {
-  socketRef.current.emit("channelFinalized", {
-    contractAddress: result.contractAddress,
-    sender: account,
-    receiver: transactions.find(
-      (tx) => tx.contractAddress.toLowerCase() === result.contractAddress.toLowerCase()
-    )?.receiver,
-  });
+
+
+  for (const result of results) {
+  console.log(`📜 Contract ${result.contractAddress}`);
+  console.log("   Before settlement:", result.balances.before);
+  console.log("   After settlement:", result.balances.after);
+}
+
+
+  socket.emit("channelFinalized", {
+  contractAddress: result.contractAddress,
+  sender: account,
+  receiver: transactions.find(
+    (tx) => tx.contractAddress.toLowerCase() === result.contractAddress.toLowerCase()
+  )?.receiver,
+});
+
+
 }
 
 

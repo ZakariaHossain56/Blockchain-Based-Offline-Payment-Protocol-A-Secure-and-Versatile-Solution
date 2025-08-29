@@ -541,34 +541,6 @@ export default function Welcome() {
 
 
 
-  // const acceptDeployment = (receiverFundingAmount) => {
-  //   if (!incomingDeployment) return;
-  //   if (!receiverFundingAmount || Number(receiverFundingAmount) <= 0) {
-  //     toast.error("Enter a valid funding amount");
-  //     return;
-  //   }
-
-  //   const ack = {
-  //     sender: incomingDeployment.sender,
-  //     receiver: currentAccount,
-  //     receiverFunding: receiverFundingAmount,
-  //     contractAddress: incomingDeployment.contractAddress,
-  //     duration: incomingDeployment.duration,
-  //     fundingAmount: incomingDeployment.fundingAmount,
-  //   };
-
-  //   // Send acknowledgement to sender
-  //   socket.emit("acceptDeployment", ack);
-
-  //   // Clear UI locally
-  //   setIncomingDeployment(null);
-  //   setReceiverFunding("");
-  //   toast.success("✅ Deployment acknowledged. Waiting for sender to deploy.");
-  // };
-
-
-
-
   // --- Microtransaction flow (frontend only) ---
   const canShowTransactionForm = () => currentDeployment && currentDeployment.accepted;
 
